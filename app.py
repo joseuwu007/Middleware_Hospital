@@ -29,6 +29,24 @@ def facturacion(datos):
     }
 
 
+def farmacia(datos):
+    """Simula la recepción de información en Farmacia."""
+    return {
+        "sistema": "FARMACIA",
+        "estado": "RECIBIDO",
+        "datos_recibidos": datos
+    }
+
+
+def radiologia(datos):
+    """Simula la recepción de información en Radiología."""
+    return {
+        "sistema": "RADIOLOGIA",
+        "estado": "RECIBIDO",
+        "datos_recibidos": datos
+    }
+
+
 def validar_token():
     auth = request.headers.get("Authorization")
 
@@ -56,18 +74,21 @@ def validar_token():
     except jwt.InvalidTokenError:
         return False, "Token inválido"
 
+
 @app.route("/", methods=["GET"])
 def inicio():
     return jsonify({
-        "aplicacion": "Middleware Hospitalario V3",
+        "aplicacion": "Middleware Hospitalario V4",
         "arquitectura": "API REST + JWT",
         "estado": "ACTIVO",
         "despliegue": "Render",
+        "destinos": ["LABORATORIO", "FACTURACION", "FARMACIA", "RADIOLOGIA"],
         "endpoints": {
             "login": "POST /login",
             "middleware": "POST /middleware"
         }
     })
+
 
 @app.route("/login", methods=["POST"])
 def login():
@@ -105,6 +126,7 @@ def login():
         "vigencia_minutos": 30
     }), 200
 
+
 @app.route("/middleware", methods=["POST"])
 def middleware():
 
@@ -133,7 +155,9 @@ def middleware():
             "error": "Se requieren los campos paciente y destino"
         }), 400
 
-    destino = str(datos["destino"]).upper()
+    # Normaliza tildes: FACTURACIÓN -> FACTURACION, RADIOLOGÍA -> RADIOLOGIA
+    destino = (str(datos["destino"]).strip().upper()
+               .replace("Í", "I").replace("Ó", "O"))
 
     # 4. LABORATORIO
     if destino == "LABORATORIO":
@@ -192,12 +216,84 @@ def middleware():
             "respuesta_destino": respuesta
         }), 200
 
-    # 6. DESTINO NO RECONOCIDO
+    # 6. FARMACIA (NUEVO)
+    elif destino == "FARMACIA":
+
+        faltantes = [c for c in ("solicitud", "cantidad") if c not in datos]
+        if faltantes:
+            return jsonify({
+                "etapa": "VALIDACION",
+                "error": "Se requieren solicitud y cantidad",
+                "campos_faltantes": faltantes
+            }), 400
+
+        cantidad = datos["cantidad"]
+        if isinstance(cantidad, bool) or not isinstance(cantidad, int) or cantidad <= 0:
+            return jsonify({
+                "etapa": "VALIDACION",
+                "error": "La cantidad debe ser un número entero mayor que 0"
+            }), 400
+
+        # Transformación + regla de negocio (más de 30 unidades requiere autorización)
+        datos_transformados = {
+            "id_paciente": datos["paciente"],
+            "medicamento": datos["solicitud"],
+            "unidades": cantidad,
+            "requiere_autorizacion": cantidad > 30
+        }
+
+        respuesta = farmacia(datos_transformados)
+
+        return jsonify({
+            "mensaje": "Solicitud procesada correctamente",
+            "usuario_autenticado": resultado_token["usuario"],
+            "destino_seleccionado": "FARMACIA",
+            "datos_originales": datos,
+            "datos_transformados": datos_transformados,
+            "respuesta_destino": respuesta
+        }), 200
+
+    # 7. RADIOLOGÍA (NUEVO)
+    elif destino == "RADIOLOGIA":
+
+        faltantes = [c for c in ("solicitud", "urgente") if c not in datos]
+        if faltantes:
+            return jsonify({
+                "etapa": "VALIDACION",
+                "error": "Se requieren solicitud y urgente",
+                "campos_faltantes": faltantes
+            }), 400
+
+        if not isinstance(datos["urgente"], bool):
+            return jsonify({
+                "etapa": "VALIDACION",
+                "error": "El campo urgente debe ser true o false"
+            }), 400
+
+        # Transformación + regla de prioridad
+        datos_transformados = {
+            "id_paciente": datos["paciente"],
+            "tipo_estudio": datos["solicitud"],
+            "prioridad": "URGENTE" if datos["urgente"] else "NORMAL"
+        }
+
+        respuesta = radiologia(datos_transformados)
+
+        return jsonify({
+            "mensaje": "Solicitud procesada correctamente",
+            "usuario_autenticado": resultado_token["usuario"],
+            "destino_seleccionado": "RADIOLOGIA",
+            "datos_originales": datos,
+            "datos_transformados": datos_transformados,
+            "respuesta_destino": respuesta
+        }), 200
+
+    # 8. DESTINO NO RECONOCIDO
     else:
         return jsonify({
             "etapa": "ENRUTAMIENTO",
             "error": "Destino no reconocido",
-            "destinos_permitidos": ["LABORATORIO", "FACTURACION"]
+            "destinos_permitidos": ["LABORATORIO", "FACTURACION", "FARMACIA", "RADIOLOGIA"]
         }), 400
 
 
